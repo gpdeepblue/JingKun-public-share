@@ -1,0 +1,313 @@
+{
+	"AWSTemplateFormatVersion": "2010-09-09",
+	"Description": "A template to deploy an AWS resources auto tagging feature to a China region account.",
+	"Metadata": {
+		"AWS::CloudFormation::Interface": {
+			"ParameterGroups": [
+				{
+					"Label": {
+						"default": "Prerequisites"
+					},
+					"Parameters": [
+						"IsCloudTrailEnabled"
+					]
+				}
+			],
+			"ParameterLabels": {
+				"IsCloudTrailEnabled": {
+					"default": "Is CloudTrail Trails already enabled in this account? Trails log in S3 is a requirement for Cloudwatch Events. If not, choose 'No' and the template will go ahead and enable it for you."
+				}
+			}
+		}
+	},
+	"Parameters": {
+		"IsCloudTrailEnabled": {
+			"Description": "Specify if CloudTrail is enabled in the current account",
+			"Type": "String",
+			"Default": "No",
+			"AllowedValues": [
+				"Yes",
+				"No"
+			]
+		}
+	},
+	"Conditions": {
+		"CreateResources": {
+			"Fn::Equals": [
+				{
+					"Ref": "IsCloudTrailEnabled"
+				},
+				"Yes"
+			]
+		},
+		"EnableCloudTrail": {
+			"Fn::Equals": [
+				{
+					"Ref": "IsCloudTrailEnabled"
+				},
+				"No"
+			]
+		}
+	},
+	"Resources": {
+		"S3Bucket": {
+			"DeletionPolicy": "Retain",
+			"Type": "AWS::S3::Bucket",
+			"Condition": "EnableCloudTrail",
+			"Properties": {
+				"BucketName": "cloudtrail-logs-for-autotagging"
+			}
+		},
+		"BucketPolicy": {
+			"Type": "AWS::S3::BucketPolicy",
+			"Condition": "EnableCloudTrail",
+			"Properties": {
+				"Bucket": {
+					"Ref": "S3Bucket"
+				},
+				"PolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+						{
+							"Sid": "AWSCloudTrailAclCheck",
+							"Effect": "Allow",
+							"Principal": {
+								"Service": "cloudtrail.amazonaws.com"
+							},
+							"Action": "s3:GetBucketAcl",
+							"Resource": {
+								"Fn::Join": [
+									"",
+									[
+										"arn:aws:s3:::",
+										{
+											"Ref": "S3Bucket"
+										}
+									]
+								]
+							}
+						},
+						{
+							"Sid": "AWSCloudTrailWrite",
+							"Effect": "Allow",
+							"Principal": {
+								"Service": "cloudtrail.amazonaws.com"
+							},
+							"Action": "s3:PutObject",
+							"Resource": {
+								"Fn::Join": [
+									"",
+									[
+										"arn:aws:s3:::",
+										{
+											"Ref": "S3Bucket"
+										},
+										"/AWSLogs/",
+										{
+											"Ref": "AWS::AccountId"
+										},
+										"/*"
+									]
+								]
+							},
+							"Condition": {
+								"StringEquals": {
+									"s3:x-amz-acl": "bucket-owner-full-control"
+								}
+							}
+						}
+					]
+				}
+			}
+		},
+		"myTrail": {
+			"Condition": "EnableCloudTrail",
+			"DependsOn": [
+				"BucketPolicy"
+			],
+			"Type": "AWS::CloudTrail::Trail",
+			"Properties": {
+				"TrailName": "Write-onlyTrail",
+				"S3BucketName": {
+					"Ref": "S3Bucket"
+				},
+				"IsLogging": true
+			}
+		},
+		"EventRule": {
+			"Type": "AWS::Events::Rule",
+			"Properties": {
+				"Description": "Trigger a Lambda function anytime a new AWS resource listed is created",
+				"EventPattern": {
+					"source": [
+						"aws.dynamodb",
+						"aws.ec2",
+						"aws.s3",
+						"aws.redshift",
+						"aws.rds",
+						"aws.lambda",
+						"aws.sqs",
+						"aws.elb"
+					],
+					"detail-type": [
+						"AWS API Call via CloudTrail"
+					],
+					"detail": {
+						"eventSource": [
+							"redshift.amazonaws.com",
+							"dynamodb.amazonaws.com",
+							"lambda.amazonaws.com",
+							"ec2.amazonaws.com",
+							"s3.amazonaws.com",
+							"rds.amazonaws.com",
+							"sqs.amazonaws.com",
+							"elb.amazonaws.com"
+						],
+						"eventName": [
+							"CreateBucket",
+							"PutObject",
+							"CreateImage",
+							"RegisterImage",
+							"CreateSnapshot",
+							"CreateTable",
+							"CreateVolume",
+							"CreateVpc",
+							"RunInstances",
+							"CreateCluster",
+							"CreateQueue",
+							"CreateVpc",
+							"CreateDBInstance",
+							"CreateLoadBalancer",
+							"AllocateAddress"
+						]
+					}
+				},
+				"Name": "New-Resources-Event",
+				"State": "ENABLED",
+				"Targets": [
+					{
+						"Arn": {
+							"Ref": "ProductionAlias"
+						},
+						"Id": "Production"
+					}
+				]
+			}
+		},
+		"CFAutoTag": {
+			"Type": "AWS::Lambda::Function",
+			"Properties": {
+				"Code": {
+					"S3Bucket": "lambda-functions-public-share",
+					"S3Key": "AutoTagging.zip"
+				},
+				"Description": "This function tags AWS Resources in response to Cloudwatch Events.",
+				"Handler": "index.lambda_handler",
+				"Role": {
+					"Fn::GetAtt": [
+						"LambdaAutoTaggingRole",
+						"Arn"
+					]
+				},
+				"Runtime": "python3.7",
+				"Timeout": "30"
+			}
+		},
+		"StableVersion": {
+			"Type": "AWS::Lambda::Version",
+			"Properties": {
+				"FunctionName": {
+					"Ref": "CFAutoTag"
+				},
+				"Description": "Stable version"
+			}
+		},
+		"ProductionAlias": {
+			"Type": "AWS::Lambda::Alias",
+			"Properties": {
+				"FunctionName": {
+					"Ref": "CFAutoTag"
+				},
+				"FunctionVersion": {
+					"Fn::GetAtt": [
+						"StableVersion",
+						"Version"
+					]
+				},
+				"Name": "PROD"
+			}
+		},
+		"PermissionForEventsToInvokeLambda": {
+			"Type": "AWS::Lambda::Permission",
+			"Properties": {
+				"FunctionName": {
+					"Ref": "ProductionAlias"
+				},
+				"Action": "lambda:InvokeFunction",
+				"Principal": "events.amazonaws.com",
+				"SourceArn": {
+					"Fn::GetAtt": [
+						"EventRule",
+						"Arn"
+					]
+				}
+			}
+		},
+		"LambdaAutoTaggingRole": {
+			"Type": "AWS::IAM::Role",
+			"Properties": {
+				"AssumeRolePolicyDocument": {
+					"Version": "2012-10-17",
+					"Statement": [
+						{
+							"Effect": "Allow",
+							"Principal": {
+								"Service": [
+									"lambda.amazonaws.com"
+								]
+							},
+							"Action": [
+								"sts:AssumeRole"
+							]
+						}
+					]
+				},
+				"Policies": [
+					{
+						"PolicyName": "LambdaTaggingExecutionRolePolicy",
+						"PolicyDocument": {
+							"Version": "2012-10-17",
+							"Statement": [
+								{
+									"Sid": "VisualEditor0",
+									"Effect": "Allow",
+									"Action": [
+										"rds:AddTagsToResource",
+										"redshift:CreateTags",
+										"lambda:TagResource",
+										"ec2:DescribeInstances",
+										"ec2:CreateTags",
+										"s3:PutObjectVersionTagging",
+										"logs:CreateLogGroup",
+										"logs:PutLogEvents",
+										"sqs:TagQueue",
+										"logs:CreateLogStream",
+										"ec2:DescribeNetworkInterfaces",
+										"dynamodb:TagResource",
+										"s3:PutBucketTagging",
+										"ec2:DescribeVolumes",
+										"elasticloadbalancing:AddTags",
+										"s3:PutObjectTagging",
+										"iam:GetUser"
+									],
+									"Resource": "*"
+								}
+							]
+						}
+					}
+				]
+			}
+		}
+	},
+	"Outputs": {}
+}
