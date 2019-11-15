@@ -178,7 +178,8 @@
 							"CreateVpc",
 							"CreateDBInstance",
 							"CreateLoadBalancer",
-							"AllocateAddress"
+							"AllocateAddress",
+							"CreateFunction20150331"
 						]
 					}
 				},
