@@ -166,7 +166,6 @@
 						"eventName": [
 							"CreateBucket",
 							"PutObject",
-							"CreateImage",
 							"RegisterImage",
 							"CreateSnapshot",
 							"CreateTable",
@@ -175,7 +174,6 @@
 							"RunInstances",
 							"CreateCluster",
 							"CreateQueue",
-							"CreateVpc",
 							"CreateDBInstance",
 							"CreateLoadBalancer",
 							"AllocateAddress",
